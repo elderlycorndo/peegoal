@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Neon Cascade Ultimate</title>
+
+<style>
+body{
+margin:0;
+overflow:hidden;
+font-family:system-ui;
+background:radial-gradient(circle at top,#1e1b4b,#020617);
+}
+
+canvas{display:block;}
+
+.ui{
+position:fixed;
+top:10px;
+left:10px;
+color:white;
+z-index:10;
+font-size:14px;
+}
+
+.box{
+background:rgba(255,255,255,0.08);
+padding:8px 12px;
+margin:4px;
+border-radius:10px;
+backdrop-filter:blur(10px);
+}
+
+.screen{
+position:fixed;
+inset:0;
+display:none;
+justify-content:center;
+align-items:center;
+flex-direction:column;
+background:rgba(0,0,0,0.75);
+color:white;
+z-index:20;
+}
+
+button{
+padding:10px 18px;
+margin-top:10px;
+cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div class="ui">
+<div class="box">Score: <span id="score">0</span></div>
+<div class="box">Balls: <span id="balls">10</span></div>
+<div class="box">Level: <span id="level">1</span></div>
+<div class="box">Combo: <span id="combo">0</span></div>
+</div>
+
+<div class="screen" id="win">
+<h1>STAGE COMPLETE</h1>
+<button onclick="nextLevel()">Next</button>
+</div>
+
+<div class="screen" id="fail">
+<h1>NO BALLS LEFT</h1>
+<button onclick="restart()">Retry</button>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+
+const c=document.getElementById("c");
+const ctx=c.getContext("2d");
+
+c.width=innerWidth;
+c.height=innerHeight;
+
+// ---------------- STATE ----------------
+let score=Number(localStorage.getItem("score")||0);
+let level=Number(localStorage.getItem("level")||1);
+
+let ballsLeft=10;
+let combo=0;
+let fever=0;
+let slowMo=0;
+
+let balls=[];
+let pegs=[];
+let particles=[];
+
+// ---------------- AUDIO ENGINE ----------------
+const audio=new (window.AudioContext||window.webkitAudioContext)();
+
+function beep(freq,dur=0.08,type="sine"){
+let o=audio.createOscillator();
+let g=audio.createGain();
+o.type=type;
+o.frequency.value=freq;
+o.connect(g);
+g.connect(audio.destination);
+g.gain.value=0.05;
+o.start();
+o.stop(audio.currentTime+dur);
+}
+
+// ---------------- PEG ----------------
+class Peg{
+constructor(x,y,move=false){
+this.x=x;
+this.y=y;
+this.r=12;
+this.hit=false;
+this.move=move;
+this.t=Math.random()*100;
+}
+
+update(){
+if(this.move){
+this.x+=Math.sin(this.t)*1.2;
+this.t+=0.04;
+}
+}
+
+draw(){
+if(this.hit)return;
+
+ctx.beginPath();
+ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
+
+let col=fever>0?
+`hsl(${Date.now()*0.2%360},100%,60%)`:
+"#f59e0b";
+
+ctx.fillStyle=col;
+ctx.fill();
+}
+}
+
+// ---------------- BALL ----------------
+class Ball{
+constructor(x,y,vx,vy){
+this.x=x;
+this.y=y;
+this.vx=vx;
+this.vy=vy;
+this.r=10;
+this.dead=false;
+}
+
+update(){
+
+let g=slowMo>0?0.08:0.18;
+this.vy+=g;
+
+this.x+=this.vx;
+this.y+=this.vy;
+
+// walls
+if(this.x<this.r||this.x>c.width-this.r)this.vx*=-0.98;
+
+// peg collision
+for(let p of pegs){
+if(p.hit)continue;
+
+let dx=this.x-p.x;
+let dy=this.y-p.y;
+let d=Math.sqrt(dx*dx+dy*dy);
+
+if(d<this.r+p.r){
+
+p.hit=true;
+
+combo++;
+
+score+=100*combo;
+
+beep(200+combo*10);
+
+explode(p.x,p.y);
+
+let nx=dx/d;
+let ny=dy/d;
+
+let dot=this.vx*nx+this.vy*ny;
+
+this.vx-=2*dot*nx;
+this.vy-=2*dot*ny;
+
+// fever trigger
+if(combo>12){
+fever=300;
+}
+
+}
+}
+
+if(this.y>c.height)this.dead=true;
+}
+
+draw(){
+
+ctx.beginPath();
+
+ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
+
+ctx.fillStyle=
+fever>0?
+`hsl(${Math.random()*360},100%,60%)`
+:"white";
+
+ctx.fill();
+}
+}
+
+// ---------------- PARTICLES ----------------
+function explode(x,y){
+for(let i=0;i<14;i++){
+particles.push({
+x,y,
+vx:(Math.random()-0.5)*6,
+vy:(Math.random()-0.5)*6,
+life:30
+});
+}
+}
+
+// ---------------- LEVELS ----------------
+function loadLevel(){
+
+pegs=[];
+
+let count=25+level*6;
+
+for(let i=0;i<count;i++){
+pegs.push(new Peg(
+100+Math.random()*(c.width-200),
+100+Math.random()*(c.height-250),
+Math.random()<0.25
+));
+}
+}
+
+// ---------------- UI ----------------
+function updateUI(){
+document.getElementById("score").innerText=score;
+document.getElementById("balls").innerText=ballsLeft;
+document.getElementById("level").innerText=level;
+document.getElementById("combo").innerText=combo;
+}
+
+// ---------------- GAME LOOP ----------------
+function loop(){
+
+ctx.clearRect(0,0,c.width,c.height);
+
+// glow bg
+ctx.fillStyle="rgba(255,255,255,0.03)";
+for(let i=0;i<30;i++){
+ctx.fillRect(Math.random()*c.width,Math.random()*c.height,2,2);
+}
+
+// update systems
+pegs.forEach(p=>{p.update();p.draw();});
+
+balls.forEach(b=>{b.update();b.draw();});
+balls=balls.filter(b=>!b.dead);
+
+// particles
+particles.forEach(p=>{
+p.x+=p.vx;
+p.y+=p.vy;
+p.life--;
+
+ctx.fillStyle="orange";
+ctx.fillRect(p.x,p.y,2,2);
+});
+particles=particles.filter(p=>p.life>0);
+
+// timers
+if(fever>0)fever--;
+if(slowMo>0)slowMo--;
+
+// UI
+updateUI();
+
+// win
+if(pegs.every(p=>p.hit)){
+document.getElementById("win").style.display="flex";
+}
+
+// fail
+if(ballsLeft<=0 && balls.length===0){
+document.getElementById("fail").style.display="flex";
+}
+
+requestAnimationFrame(loop);
+}
+
+// ---------------- INPUT ----------------
+c.addEventListener("click",(e)=>{
+
+if(ballsLeft<=0)return;
+
+ballsLeft--;
+combo=0;
+
+balls.push(new Ball(
+c.width/2,
+80,
+(e.clientX-c.width/2)/18,
+-3
+));
+
+beep(180);
+});
+
+// mobile
+c.addEventListener("touchstart",(e)=>{
+let t=e.touches[0];
+c.dispatchEvent(new MouseEvent("click",{clientX:t.clientX}));
+});
+
+// ---------------- FLOW ----------------
+function nextLevel(){
+level++;
+ballsLeft=10;
+balls=[];
+loadLevel();
+document.getElementById("win").style.display="none";
+
+localStorage.setItem("level",level);
+localStorage.setItem("score",score);
+}
+
+function restart(){
+level=1;
+score=0;
+ballsLeft=10;
+balls=[];
+loadLevel();
+document.getElementById("fail").style.display="none";
+
+localStorage.setItem("level",1);
+localStorage.setItem("score",0);
+}
+
+// start
+loadLevel();
+loop();
+
+</script>
+
+</body>
+</html>
